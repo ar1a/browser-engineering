@@ -5,6 +5,7 @@ import socket
 import ssl
 from typing import Tuple, Optional
 from urllib.parse import urlparse
+import tkinter
 
 
 def request(rawUrl):
@@ -58,44 +59,39 @@ def request(rawUrl):
 
 
 def hawp(input, expr) -> Tuple[Optional[str], str]:
-    x = re.match(expr, input)
+    x = re.match(expr, input, flags=re.DOTALL)
     if x is None:
         return None, input
     start, end = x.span()
     return input[start:end], input[end:]
 
 
-def show(body):
-    # in_angle = False
-    # for c in body:
-    #     if c == "<":
-    #         in_angle = True
-    #     elif c == ">":
-    #         in_angle = False
-    #     elif not in_angle:
-    #         print(c, end="")
+def lex(body):
     ParserState = Enum("ParserState", ["ANYTHING", "TAGNAME"])
     state = ParserState.ANYTHING
     in_body = False
+    text = ""
 
     while body:
         if state == ParserState.ANYTHING:
-            match, body = hawp(body, "<|[^<]+")
+            match, body = hawp(body, "<|\n+|[^<\n]+")
+            assert match
             if match == "<":
                 state = ParserState.TAGNAME
+            elif match.startswith("\n"):
+                if in_body and not text.endswith("\n"):
+                    text += "\n"
             elif match:
                 state = ParserState.ANYTHING
                 if in_body:
-                    print(match, end="")
-            else:
-                assert False
+                    text += match
             pass
         elif state == ParserState.TAGNAME:
             # TODO: deal with > inside tags
             tag, body = hawp(body, "/?[a-zA-Z!-]+")
             assert tag
             tag = tag.lower()
-            _, body = hawp(body, ".*>")
+            _, body = hawp(body, ".*?>")
             if tag == "body":
                 in_body = True
             elif tag == "/body":
@@ -103,14 +99,66 @@ def show(body):
             state = ParserState.ANYTHING
         else:
             assert False, f"Bad parser state: {state}"
+    return text
 
 
-def load(url):
-    headers, body = request(url)
-    show(body)
+HSTEP, VSTEP = 13, 18
+
+
+def layout(text):
+    display_list = []
+    cursor_x, cursor_y = HSTEP, VSTEP
+    for c in text:
+        display_list.append((cursor_x, cursor_y, c))
+        if c == "\n":
+            cursor_y += VSTEP * 2
+            cursor_x = HSTEP
+        cursor_x += HSTEP
+        if cursor_x >= WIDTH - HSTEP:
+            cursor_y += VSTEP
+            cursor_x = HSTEP
+    return display_list
+
+
+WIDTH, HEIGHT = 800, 600
+SCROLL_STEP = 100
+
+
+class Browser:
+    def __init__(self):
+        self.window = tkinter.Tk()
+        self.window.bind("<Down>", self.scrolldown)
+        self.window.bind("<Up>", self.scrollup)
+        self.canvas = tkinter.Canvas(self.window, width=WIDTH, height=HEIGHT)
+        self.canvas.pack()
+        self.scroll = 0
+
+    def load(self, url):
+        headers, body = request(url)
+        text = lex(body)
+        self.display_list = layout(text)
+        self.paint()
+
+    def paint(self):
+        self.canvas.delete("all")
+        for x, y, c in self.display_list:
+            if y > self.scroll + HEIGHT:
+                continue
+            if y + VSTEP < self.scroll:
+                continue
+            self.canvas.create_text(x, y - self.scroll, text=c)
+
+    def scrolldown(self, _):
+        self.scroll += SCROLL_STEP
+        self.paint()
+
+    def scrollup(self, _):
+        self.scroll -= SCROLL_STEP
+        self.paint()
 
 
 if __name__ == "__main__":
     import sys
 
-    load(sys.argv[1])
+    Browser().load(sys.argv[1])
+    tkinter.mainloop()
