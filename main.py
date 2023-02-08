@@ -130,16 +130,15 @@ class Browser:
         self.window.bind("<Down>", self.scrolldown)
         self.window.bind("<Up>", self.scrollup)
         self.window.bind("<MouseWheel>", self.mousewheel)
+        self.window.bind("<Configure>", self.on_configure)
         self.canvas = tkinter.Canvas(self.window, width=WIDTH, height=HEIGHT)
-        self.canvas.pack()
+        self.canvas.pack(fill="both", expand=True)
         self.scroll = 0
 
     def load(self, url):
         headers, body = request(url)
-        text = lex(body)
-        self.display_list = layout(text)
-        self.max_y = max(x[1] for x in self.display_list)
-        self.paint()
+        self.text = lex(body)
+        self.reflow()
 
     def paint(self):
         self.canvas.delete("all")
@@ -161,6 +160,22 @@ class Browser:
             if y + VSTEP < self.scroll:
                 continue
             self.canvas.create_text(x, y - self.scroll, text=c)
+
+    def on_configure(self, e):
+        global WIDTH
+        global HEIGHT
+        # FIXME: when requesting a window of size x, y windows gives you a
+        # window of size x + 4, y + 4. this is a shit hack to get all the maths
+        # to work again
+        WIDTH, HEIGHT = e.width - 4, e.height - 4
+        pprint(e)
+        self.reflow()
+
+    def reflow(self):
+        pprint((WIDTH, HEIGHT))
+        self.display_list = layout(self.text)
+        self.max_y = max(x[1] for x in self.display_list)
+        self.paint()
 
     def scrolldown(self, _):
         self.scroll += SCROLL_STEP
