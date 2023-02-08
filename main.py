@@ -129,6 +129,7 @@ class Browser:
         self.window = tkinter.Tk()
         self.window.bind("<Down>", self.scrolldown)
         self.window.bind("<Up>", self.scrollup)
+        self.window.bind("<MouseWheel>", self.mousewheel)
         self.canvas = tkinter.Canvas(self.window, width=WIDTH, height=HEIGHT)
         self.canvas.pack()
         self.scroll = 0
@@ -154,7 +155,17 @@ class Browser:
 
     def scrollup(self, _):
         self.scroll -= SCROLL_STEP
+        if self.scroll < 0:
+            self.scroll = 0
         self.paint()
+
+    # TODO: mac delta is inverted, and linux doesn't even use <MouseWheel> events
+    def mousewheel(self, e):
+        assert e.delta != 0
+        if e.delta > 0:
+            self.scrollup(e)
+        else:
+            self.scrolldown(e)
 
 
 if __name__ == "__main__":
