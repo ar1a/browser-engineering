@@ -174,7 +174,8 @@ class Browser:
     def reflow(self):
         pprint((WIDTH, HEIGHT))
         self.display_list = layout(self.text)
-        self.max_y = max(x[1] for x in self.display_list)
+        # FIXME: why is it / 2. whatever
+        self.max_y = max(x[1] + VSTEP / 2 for x in self.display_list)
         self.paint()
 
     def scrolldown(self, _):
