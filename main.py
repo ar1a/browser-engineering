@@ -138,10 +138,23 @@ class Browser:
         headers, body = request(url)
         text = lex(body)
         self.display_list = layout(text)
+        self.max_y = max(x[1] for x in self.display_list)
         self.paint()
 
     def paint(self):
         self.canvas.delete("all")
+        scroll_percent = self.scroll / (self.max_y - HEIGHT)
+        KNOB = 30
+        TOP_PADDING = VSTEP
+        usable_height = HEIGHT - TOP_PADDING - KNOB
+        self.canvas.create_rectangle(WIDTH - 6, VSTEP, WIDTH, HEIGHT, fill="#ccc")
+        self.canvas.create_rectangle(
+            WIDTH - 6,
+            scroll_percent * usable_height + TOP_PADDING,
+            WIDTH,
+            scroll_percent * usable_height + TOP_PADDING + KNOB,
+            fill="#aaa"
+        )
         for x, y, c in self.display_list:
             if y > self.scroll + HEIGHT:
                 continue
@@ -151,12 +164,12 @@ class Browser:
 
     def scrolldown(self, _):
         self.scroll += SCROLL_STEP
+        self.scroll = min(self.scroll, self.max_y - HEIGHT)
         self.paint()
 
     def scrollup(self, _):
         self.scroll -= SCROLL_STEP
-        if self.scroll < 0:
-            self.scroll = 0
+        self.scroll = max(self.scroll, 0)
         self.paint()
 
     # TODO: mac delta is inverted, and linux doesn't even use <MouseWheel> events
