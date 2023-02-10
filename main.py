@@ -1,11 +1,13 @@
+from dataclasses import dataclass
 from enum import Enum
 from pprint import pprint
 import re
 import socket
 import ssl
-from typing import Tuple, Optional
-from urllib.parse import urlparse
 import tkinter
+import tkinter.font
+from typing import Optional, Tuple
+from urllib.parse import urlparse
 
 
 def request(rawUrl):
@@ -66,11 +68,21 @@ def hawp(input, expr) -> Tuple[Optional[str], str]:
     return input[start:end], input[end:]
 
 
+@dataclass
+class Text:
+    text: str
+
+
+@dataclass
+class Tag:
+    tag: str
+
+
 def lex(body):
     ParserState = Enum("ParserState", ["ANYTHING", "TAGNAME"])
     state = ParserState.ANYTHING
     in_body = False
-    text = ""
+    out = []
 
     while body:
         if state == ParserState.ANYTHING:
@@ -78,46 +90,103 @@ def lex(body):
             assert match
             if match == "<":
                 state = ParserState.TAGNAME
-            elif match.startswith("\n"):
-                if in_body and not text.endswith("\n"):
-                    text += "\n"
             elif match:
                 state = ParserState.ANYTHING
                 if in_body:
-                    text += match
+                    out.append(Text(match))
             pass
         elif state == ParserState.TAGNAME:
             # TODO: deal with > inside tags
             tag, body = hawp(body, "/?[a-zA-Z!-]+")
             assert tag
             tag = tag.lower()
-            _, body = hawp(body, ".*?>")
+            rest, body = hawp(body, ".*?>")
+            assert rest
             if tag == "body":
                 in_body = True
             elif tag == "/body":
                 in_body = False
+            # remove the ">" at the end of `rest`
+            out.append(Tag(tag + rest[:-1]))
             state = ParserState.ANYTHING
         else:
             assert False, f"Bad parser state: {state}"
-    return text
+    return out
 
 
 HSTEP, VSTEP = 13, 18
+FONTS = {}
 
 
-def layout(text):
-    display_list = []
-    cursor_x, cursor_y = HSTEP, VSTEP
-    for c in text:
-        display_list.append((cursor_x, cursor_y, c))
-        if c == "\n":
-            cursor_y += VSTEP * 2
-            cursor_x = HSTEP
-        cursor_x += HSTEP
-        if cursor_x >= WIDTH - HSTEP:
-            cursor_y += VSTEP
-            cursor_x = HSTEP
-    return display_list
+def get_font(size, weight, slant):
+    key = (size, weight, slant)
+    if key not in FONTS:
+        font = tkinter.font.Font(family="Times", size=size, weight=weight, slant=slant)
+        FONTS[key] = font
+    return FONTS[key]
+
+
+class Layout:
+    def __init__(self, tokens):
+        self.display_list = []
+        self.cursor_x = HSTEP
+        self.cursor_y = VSTEP
+        self.weight = "normal"
+        self.style = "roman"
+        self.size = 16
+        self.line = []
+
+        for token in tokens:
+            self.token(token)
+        self.flush()
+
+    def token(self, token):
+        if isinstance(token, Text):
+            self.text(token)
+        elif token.tag == "i":
+            self.style = "italic"
+        elif token.tag == "/i":
+            self.style = "roman"
+        elif token.tag == "b":
+            self.weight = "bold"
+        elif token.tag == "/b":
+            self.weight = "normal"
+        elif token.tag == "small":
+            self.size -= 2
+        elif token.tag == "/small":
+            self.size += 2
+        elif token.tag == "big":
+            self.size += 4
+        elif token.tag == "/big":
+            self.size -= 4
+        elif token.tag == "br":
+            self.flush()
+        elif token.tag == "/p":
+            self.flush()
+            self.cursor_y += VSTEP
+
+    def text(self, token):
+        font = get_font(self.size, self.weight, self.style)
+        for word in token.text.split():
+            w = font.measure(word)
+            if self.cursor_x + w > WIDTH - HSTEP:
+                self.flush()
+            self.line.append((self.cursor_x, word, font))
+            self.cursor_x += w + font.measure(" ")
+
+    def flush(self):
+        if not self.line:
+            return
+        metrics = [font.metrics() for _, _, font in self.line]
+        max_ascent = max([metric["ascent"] for metric in metrics])
+        baseline = self.cursor_y + 1.25 * max_ascent
+        for x, word, font in self.line:
+            y = baseline - font.metrics("ascent")
+            self.display_list.append((x, y, word, font))
+        max_descent = max([metric["descent"] for metric in metrics])
+        self.cursor_y = baseline + 1.25 * max_descent
+        self.cursor_x = HSTEP
+        self.line = []
 
 
 WIDTH, HEIGHT = 800, 600
@@ -136,8 +205,8 @@ class Browser:
         self.scroll = 0
 
     def load(self, url):
-        headers, body = request(url)
-        self.text = lex(body)
+        _, body = request(url)
+        self.tokens = lex(body)
         self.reflow()
 
     def paint(self):
@@ -152,14 +221,14 @@ class Browser:
             scroll_percent * usable_height + TOP_PADDING,
             WIDTH,
             scroll_percent * usable_height + TOP_PADDING + KNOB,
-            fill="#aaa"
+            fill="#aaa",
         )
-        for x, y, c in self.display_list:
+        for x, y, c, font in self.display_list:
             if y > self.scroll + HEIGHT:
                 continue
             if y + VSTEP < self.scroll:
                 continue
-            self.canvas.create_text(x, y - self.scroll, text=c)
+            self.canvas.create_text(x, y - self.scroll, text=c, font=font, anchor="nw")
 
     def on_configure(self, e):
         global WIDTH
@@ -172,8 +241,7 @@ class Browser:
         self.reflow()
 
     def reflow(self):
-        pprint((WIDTH, HEIGHT))
-        self.display_list = layout(self.text)
+        self.display_list = Layout(self.tokens).display_list
         # FIXME: why is it / 2. whatever
         self.max_y = max(x[1] + VSTEP / 2 for x in self.display_list)
         self.paint()
