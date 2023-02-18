@@ -1,12 +1,23 @@
 from enum import Enum
+from functools import cache
 from pprint import pprint
 import re
 import socket
 import ssl
 import tkinter
 import tkinter.font
-from typing import Optional, Tuple, no_type_check_decorator
+from typing import Optional, Tuple
 from urllib.parse import urlparse
+
+
+@cache
+def measure_word(font, word):
+    return get_font(*font).measure(word)
+
+
+@cache
+def font_metrics(font, *options):
+    return get_font(*font).metrics(*options)
 
 
 def request(rawUrl):
@@ -204,6 +215,77 @@ class HTMLParser:
         return tag, attributes
 
 
+def style(node):
+    node.style = {}
+
+    if isinstance(node, Element) and "style" in node.attributes:
+        pairs = CSSParser(node.attributes["style"]).body()
+        for property, value in pairs.items():
+            node.style[property] = value
+
+    for child in node.children:
+        style(child)
+
+
+class CSSParser:
+    def __init__(self, s: str) -> None:
+        self.s = s
+        self.i = 0
+
+    def whitespace(self) -> None:
+        while self.i < len(self.s) and self.s[self.i].isspace():
+            self.i += 1
+
+    def word(self) -> str:
+        start = self.i
+        while self.i < len(self.s):
+            if self.s[self.i].isalnum() or self.s[self.i] in "#-.%":
+                self.i += 1
+            else:
+                break
+        assert self.i > start, "word called when not pointing at a word"
+        return self.s[start : self.i]
+
+    def literal(self, literal) -> None:
+        assert self.i < len(self.s) and self.s[self.i] == literal
+        self.i += 1
+
+    def pair(self) -> tuple[str, str]:
+        prop = self.word()
+        self.whitespace()
+        self.literal(":")
+        self.whitespace()
+        val = self.word()
+        return prop.lower(), val
+
+    def ignore_until(self, chars) -> str | None:
+        while self.i < len(self.s):
+            if self.s[self.i] in chars:
+                return self.s[self.i]
+            else:
+                self.i += 1
+
+    def body(self) -> dict[str, str]:
+        pprint(self.s)
+        pairs = {}
+        while self.i < len(self.s):
+            try:
+                prop, val = self.pair()
+                pprint((prop, val))
+                pairs[prop.lower()] = val
+                self.whitespace()
+                self.literal(";")
+                self.whitespace()
+            except AssertionError:
+                why = self.ignore_until([";"])
+                if why == ";":
+                    self.literal(";")
+                    self.whitespace()
+                else:
+                    break
+        return pairs
+
+
 def print_tree(node, indent=0):
     print(" " * indent, node)
     for child in node.children:
@@ -326,11 +408,15 @@ class DrawText:
         self.left = x1
         self.text = text
         self.font = font
-        self.bottom = y1 + font.metrics("linespace")
+        self.bottom = y1 + font_metrics(font, "linespace")
 
     def execute(self, scroll, canvas):
         canvas.create_text(
-            self.left, self.top - scroll, text=self.text, font=self.font, anchor="nw"
+            self.left,
+            self.top - scroll,
+            text=self.text,
+            font=get_font(*self.font),
+            anchor="nw",
         )
 
 
@@ -432,23 +518,23 @@ class BlockLayout:
             self.close_tag(tree.tag)
 
     def text(self, token):
-        font = get_font(self.size, self.weight, self.style)
+        font = (self.size, self.weight, self.style)
         for word in token.text.split():
-            w = font.measure(word)
+            w = measure_word(font, word)
             if self.cursor_x + w > self.width:
                 self.flush()
             self.line.append((self.cursor_x, word, font))
-            self.cursor_x += w + font.measure(" ")
+            self.cursor_x += w + measure_word(font, " ")
 
     def flush(self):
         if not self.line:
             return
-        metrics = [font.metrics() for _, _, font in self.line]
+        metrics = [font_metrics(font) for _, _, font in self.line]
         max_ascent = max([metric["ascent"] for metric in metrics])
         baseline = self.cursor_y + 1.25 * max_ascent
         for rel_x, word, font in self.line:
             x = self.x + rel_x
-            y = self.y + baseline - font.metrics("ascent")
+            y = self.y + baseline - font_metrics(font, "ascent")
             self.display_list.append((x, y, word, font))
         max_descent = max([metric["descent"] for metric in metrics])
         self.cursor_y = baseline + 1.25 * max_descent
@@ -456,9 +542,10 @@ class BlockLayout:
         self.line = []
 
     def paint(self, display_list):
-        if isinstance(self.node, Element) and self.node.tag == "pre":
+        bgcolor = self.node.style.get("background-color", "transparent")
+        if bgcolor != "transparent":
             x2, y2 = self.x + self.width, self.y + self.height
-            rect = DrawRect(self.x, self.y, x2, y2, "gray")
+            rect = DrawRect(self.x, self.y, x2, y2, bgcolor)
             display_list.append(rect)
         for x, y, word, font in self.display_list:
             display_list.append(DrawText(x, y, word, font))
@@ -484,6 +571,7 @@ class Browser:
     def load(self, url):
         _, body = request(url)
         self.nodes = HTMLParser(body).parse()
+        style(self.nodes)
         self.reflow()
 
     def paint(self):
@@ -523,6 +611,7 @@ class Browser:
         self.document.paint(self.display_list)
         self.max_y = self.document.height - HEIGHT
         self.paint()
+        # quit()
 
     def scrolldown(self, _):
         self.scroll += SCROLL_STEP
@@ -546,5 +635,7 @@ class Browser:
 if __name__ == "__main__":
     import sys
 
+    # 1k is not enough for html.spec.whatwg.org/multipage/
+    sys.setrecursionlimit(5000)
     Browser().load(sys.argv[1])
     tkinter.mainloop()
