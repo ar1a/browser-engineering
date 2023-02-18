@@ -250,10 +250,16 @@ class DocumentLayout:
         self.children = []
 
     def layout(self):
+        self.width = WIDTH - 2 * HSTEP
+        self.x = HSTEP
+        self.y = VSTEP
         child = BlockLayout(self.node, self, None)
         self.children.append(child)
         child.layout()
-        self.display_list = child.display_list
+        self.height = child.height + 2 * VSTEP
+
+    def paint(self, display_list):
+        self.children[0].paint(display_list)
 
 
 BLOCK_ELEMENTS = [
@@ -314,6 +320,39 @@ def layout_mode(node):
         return "block"
 
 
+class DrawText:
+    def __init__(self, x1, y1, text, font) -> None:
+        self.top = y1
+        self.left = x1
+        self.text = text
+        self.font = font
+        self.bottom = y1 + font.metrics("linespace")
+
+    def execute(self, scroll, canvas):
+        canvas.create_text(
+            self.left, self.top - scroll, text=self.text, font=self.font, anchor="nw"
+        )
+
+
+class DrawRect:
+    def __init__(self, x1, y1, x2, y2, color) -> None:
+        self.top = y1
+        self.left = x1
+        self.bottom = y2
+        self.right = x2
+        self.color = color
+
+    def execute(self, scroll, canvas):
+        canvas.create_rectangle(
+            self.left,
+            self.top - scroll,
+            self.right,
+            self.bottom - scroll,
+            width=0,
+            fill=self.color,
+        )
+
+
 class BlockLayout:
     def __init__(self, node, parent, previous) -> None:
         self.node = node
@@ -328,6 +367,8 @@ class BlockLayout:
             self.y = self.previous.y + self.previous.height
         else:
             self.y = self.parent.y
+
+        self.width = self.parent.width
 
         mode = layout_mode(self.node)
         if mode == "block":
@@ -349,7 +390,12 @@ class BlockLayout:
 
         for child in self.children:
             child.layout()
-            self.display_list.extend(child.display_list)
+
+        # calculate height after children are laid out
+        if mode == "block":
+            self.height = sum([child.height for child in self.children])
+        else:
+            self.height = self.cursor_y
 
     def open_tag(self, tag):
         if tag == "i":
@@ -409,6 +455,16 @@ class BlockLayout:
         self.cursor_x = 0
         self.line = []
 
+    def paint(self, display_list):
+        if isinstance(self.node, Element) and self.node.tag == "pre":
+            x2, y2 = self.x + self.width, self.y + self.height
+            rect = DrawRect(self.x, self.y, x2, y2, "gray")
+            display_list.append(rect)
+        for x, y, word, font in self.display_list:
+            display_list.append(DrawText(x, y, word, font))
+        for child in self.children:
+            child.paint(display_list)
+
 
 WIDTH, HEIGHT = 800, 600
 SCROLL_STEP = 100
@@ -428,7 +484,6 @@ class Browser:
     def load(self, url):
         _, body = request(url)
         self.nodes = HTMLParser(body).parse()
-        print_tree(self.nodes)
         self.reflow()
 
     def paint(self):
@@ -445,12 +500,12 @@ class Browser:
             scroll_percent * usable_height + TOP_PADDING + KNOB,
             fill="#aaa",
         )
-        for x, y, c, font in self.display_list:
-            if y > self.scroll + HEIGHT:
+        for cmd in self.display_list:
+            if cmd.top > self.scroll + HEIGHT:
                 continue
-            if y + VSTEP < self.scroll:
+            if cmd.bottom < self.scroll:
                 continue
-            self.canvas.create_text(x, y - self.scroll, text=c, font=font, anchor="nw")
+            cmd.execute(self.scroll, self.canvas)
 
     def on_configure(self, e):
         global WIDTH
@@ -459,20 +514,19 @@ class Browser:
         # window of size x + 4, y + 4. this is a shit hack to get all the maths
         # to work again
         WIDTH, HEIGHT = e.width - 4, e.height - 4
-        pprint(e)
         self.reflow()
 
     def reflow(self):
         self.document = DocumentLayout(self.nodes)
         self.document.layout()
-        self.display_list = self.document.display_list
-        # FIXME: why is it / 2. whatever
-        self.max_y = max(x[1] + VSTEP / 2 for x in self.display_list)
+        self.display_list = []
+        self.document.paint(self.display_list)
+        self.max_y = self.document.height - HEIGHT
         self.paint()
 
     def scrolldown(self, _):
         self.scroll += SCROLL_STEP
-        self.scroll = min(self.scroll, self.max_y - HEIGHT)
+        self.scroll = min(self.scroll + SCROLL_STEP, self.max_y)
         self.paint()
 
     def scrollup(self, _):
